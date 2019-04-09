@@ -1,0 +1,28 @@
+version: '3'
+services:
+  golang:
+    container_name: itaic
+    build: .
+    networks:
+      - itaic
+    ports:
+      - '8000:8000'
+  mongo:
+    container_name: mongodb
+    image: mongo
+    networks:
+      itaic:
+        ipv4_address: 175.12.0.6
+  redis-server:
+    container_name: cache
+    image: redis
+    networks:
+      itaic:
+        ipv4_address: 175.12.0.3
+
+networks:
+  itaic:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 175.12.0.0/24
