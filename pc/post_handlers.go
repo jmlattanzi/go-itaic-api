@@ -3,7 +3,6 @@ package pc
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -189,10 +188,8 @@ func HandleLikePost(ctx context.Context, client *firestore.Client) func(res http
 		}
 
 		likes := user.Likes
-		fmt.Println("likes: ", likes)
-
 		addToLikes, i := remove(likes, id)
-		if addToLikes == false && i == 0{
+		if addToLikes == false && i == 0 {
 			likes = append(likes, id)
 			post.Likes++
 		} else {
@@ -219,10 +216,8 @@ func remove(likes []string, id string) (bool, int) {
 	for i := 0; i < len(likes); i++ {
 		likeID := likes[i]
 		if likeID == id {
-			fmt.Println("id found")
 			return true, i
 		}
 	}
-	fmt.Println("id not found in list")
 	return false, 0
 }
