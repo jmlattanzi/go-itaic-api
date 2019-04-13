@@ -3,6 +3,7 @@ package pc
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -11,7 +12,12 @@ import (
 	"goji.io/pat"
 	"google.golang.org/api/iterator"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/fatih/structs"
+	"github.com/jmlattanzi/itaic/config"
 	"github.com/jmlattanzi/itaic/models"
 )
 
@@ -29,7 +35,7 @@ func HandleGetPosts(ctx context.Context, client *firestore.Client) func(res http
 			}
 
 			if err != nil {
-				log.Fatal("[ ! ] Error iterating documents: ", err)
+				log.Fatal("[ ! ] Error iterating document: ", err)
 			}
 
 			// fmt.Println(doc.Data())
@@ -71,22 +77,51 @@ func HandleCreatePost(ctx context.Context, client *firestore.Client) func(res ht
 
 		// setup the new post
 		newPost := models.Post{}
-		err := json.NewDecoder(req.Body).Decode(&newPost)
-		if err != nil {
-			log.Fatal("[ ! ] Error decoding request body: ", err)
-		}
+		user := models.User{}
+		caption := req.FormValue("caption")
+		uid := req.FormValue("uid")
+		imageLocation := upload(req)
 
 		// create a new document in the collection
 		doc := client.Collection("posts").NewDoc()
 
 		// using the new doc, set the id in the post to the doc's id
 		newPost.ID = doc.ID
+		newPost.UID = uid
+		newPost.Caption = caption
 		newPost.Created = time.Now().String()
+		newPost.ImageURL = imageLocation
 
 		// write data to the doc
-		_, err = doc.Create(ctx, newPost)
+		_, err := doc.Create(ctx, newPost)
 		if err != nil {
 			log.Fatal("[ ! ] Error creating new document: ", err)
+		}
+
+		query := client.Collection("users").Where("uid", "==", uid)
+		iter := query.Documents(ctx)
+		for {
+			doc, err := iter.Next()
+			if err == iterator.Done {
+				break
+			}
+
+			if err != nil {
+				log.Fatal("[ ! ] Error iterating documents: ", err)
+			}
+
+			fmt.Println("doc.Data: ", doc.Data())
+
+			err = doc.DataTo(&user)
+			if err != nil {
+				log.Fatal("[ ! ] Error mapping data to struct: ", err)
+			}
+		}
+
+		user.Posts = append(user.Posts, doc.ID)
+		_, err = client.Collection("users").Doc(user.ID).Set(ctx, user)
+		if err != nil {
+			log.Fatal("[ ! ] Error assigning post to user: ", err)
 		}
 
 		json.NewEncoder(res).Encode(&newPost)
@@ -97,9 +132,44 @@ func HandleCreatePost(ctx context.Context, client *firestore.Client) func(res ht
 func HandleDeletePost(ctx context.Context, client *firestore.Client) func(res http.ResponseWriter, req *http.Request) {
 	return func(res http.ResponseWriter, req *http.Request) {
 		id := pat.Param(req, "id")
+		uid := pat.Param(req, "uid")
+		user := models.User{}
 		_, err := client.Collection("posts").Doc(string(id)).Delete(ctx)
 		if err != nil {
 			log.Fatal("[ ! ] Error deleting post: ", err)
+		}
+
+		query := client.Collection("users").Where("uid", "==", uid)
+		iter := query.Documents(ctx)
+		for {
+			doc, err := iter.Next()
+			if err == iterator.Done {
+				break
+			}
+
+			if err != nil {
+				log.Fatal("[ ! ] Error iterating documents: ", err)
+			}
+
+			fmt.Println("doc.Data: ", doc.Data())
+
+			err = doc.DataTo(&user)
+			if err != nil {
+				log.Fatal("[ ! ] Error mapping data to struct: ", err)
+			}
+		}
+
+		for i := 0; i < len(user.Posts); i++ {
+			if user.Posts[i] == id {
+				user.Posts = append(user.Posts[:i], user.Posts[i+1:]...)
+				i--
+				break
+			}
+		}
+
+		_, err = client.Collection("users").Doc(user.ID).Set(ctx, user)
+		if err != nil {
+			log.Fatal("[ ! ] Error setting user: ", err)
 		}
 
 		json.NewEncoder(res).Encode("Post deleted")
@@ -210,6 +280,38 @@ func HandleLikePost(ctx context.Context, client *firestore.Client) func(res http
 
 		json.NewEncoder(res).Encode(&post)
 	}
+}
+
+func upload(r *http.Request) string {
+	config := config.LoadConfigurationFile("config.json")
+
+	creds := credentials.NewStaticCredentials(config.S3AccessKey, config.S3SecretAccessKey, "")
+	sesh := session.Must(session.NewSession(&aws.Config{
+		Credentials: creds,
+		Region:      aws.String("us-west-1"),
+	}))
+	uploader := s3manager.NewUploader(sesh)
+
+	file, header, err := r.FormFile("image")
+	if err != nil {
+		log.Fatal("[!] Error in FormFile (UploadPostHandler): ", err)
+	}
+	defer file.Close()
+	fmt.Println("[>] Filename: ", header.Filename)
+
+	result, err := uploader.Upload(&s3manager.UploadInput{
+		Bucket: aws.String(config.S3Bucket),
+		Key:    aws.String(header.Filename),
+		Body:   file,
+	})
+
+	if err != nil {
+		log.Fatal("[!] Error uploading file: ", err)
+	}
+
+	fmt.Println("[+] File uploaded")
+	fmt.Println("[+] File URL: ", result.Location)
+	return result.Location
 }
 
 func remove(likes []string, id string) (bool, int) {

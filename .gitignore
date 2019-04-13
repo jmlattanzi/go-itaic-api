@@ -1,4 +1,5 @@
 itaic-key.json
+config.json
 Dockerfile
 docker-compose.yml
 .dockerignore
