@@ -92,12 +92,6 @@ func HandleCreatePost(ctx context.Context, client *firestore.Client) func(res ht
 		newPost.Created = time.Now().String()
 		newPost.ImageURL = imageLocation
 
-		// write data to the doc
-		_, err := doc.Create(ctx, newPost)
-		if err != nil {
-			log.Fatal("[ ! ] Error creating new document: ", err)
-		}
-
 		query := client.Collection("users").Where("uid", "==", uid)
 		iter := query.Documents(ctx)
 		for {
@@ -117,8 +111,15 @@ func HandleCreatePost(ctx context.Context, client *firestore.Client) func(res ht
 				log.Fatal("[ ! ] Error mapping data to struct: ", err)
 			}
 		}
-
 		user.Posts = append(user.Posts, doc.ID)
+		newPost.Username = user.Username
+
+		// write data to the doc
+		_, err := doc.Create(ctx, newPost)
+		if err != nil {
+			log.Fatal("[ ! ] Error creating new document: ", err)
+		}
+
 		_, err = client.Collection("users").Doc(user.ID).Set(ctx, user)
 		if err != nil {
 			log.Fatal("[ ! ] Error assigning post to user: ", err)
@@ -294,7 +295,7 @@ func upload(r *http.Request) string {
 
 	file, header, err := r.FormFile("image")
 	if err != nil {
-		log.Fatal("[!] Error in FormFile (UploadPostHandler): ", err)
+		log.Fatal("[!] Error in FormFile: ", err)
 	}
 	defer file.Close()
 	fmt.Println("[>] Filename: ", header.Filename)
