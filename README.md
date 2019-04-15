@@ -1,3 +1,1 @@
-Testing out a new version of the API for my previous project, ITAIC. This time I am experimenting with the Firestore Go package, Redis and Goji.
-
-This is still very early in development and is setup as such, so take all the code with a grain of salt.
+This repo will no longer be updated as it relies on another package I've created, I've moved it into a separate project. https://github.com/jmlattanzi/itaic-backend

@@ -1,22 +1,38 @@
 version: '3'
 services:
   golang:
-    container_name: db_api
+    container_name: db-api
     build: .
     networks:
-      - itaic
+      itaic-net:
+        ipv4_address: 176.24.0.3
     ports:
       - '8000:8000'
+  golang:
+    container_name: cache-api
+    image: itaic-cache
+    networks:
+      - itaic-net
+    ports:
+      - '5000:5000'
+  rabbitmq:
+    container_name: queue,
+    image: rabbitmq
+    networks:
+      itaic-net:
+        ipv4_address: 176.24.0.9
+    ports:
+      - '5672:5672'
   redis-server:
     container_name: cache
     image: redis
     networks:
-      itaic:
-        ipv4_address: 175.12.0.3
+      itaic-net:
+        ipv4_address: 176.24.0.1
 
 networks:
-  itaic:
+  itaic-net:
     driver: bridge
     ipam:
       config:
-        - subnet: 175.12.0.0/24
+        - subnet: 176.24.0.0/24

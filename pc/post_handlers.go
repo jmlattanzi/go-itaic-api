@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/streadway/amqp"
+
 	"cloud.google.com/go/firestore"
 	"goji.io/pat"
 	"google.golang.org/api/iterator"
@@ -38,7 +40,6 @@ func HandleGetPosts(ctx context.Context, client *firestore.Client) func(res http
 				log.Fatal("[ ! ] Error iterating document: ", err)
 			}
 
-			// fmt.Println(doc.Data())
 			err = doc.DataTo(&post)
 			if err != nil {
 				log.Fatal("[ ! ] Error mapping data to struct: ", err)
@@ -57,13 +58,20 @@ func HandleGetPostByID(ctx context.Context, client *firestore.Client) func(res h
 		post := models.Post{}
 		id := pat.Param(req, "id")
 		doc, err := client.Collection("posts").Doc(id).Get(ctx)
+
 		if err != nil {
-			log.Fatal("[ ! ] Error finding document: ", err)
+			fmt.Println("[ ! ] Document get returned an err: ", err)
+			res.WriteHeader(http.StatusInternalServerError)
+			res.Write([]byte("500 - post not found"))
+			return
 		}
 
 		err = doc.DataTo(&post)
 		if err != nil {
-			log.Fatal("[ ! ] Error mapping data into struct: ", err)
+			fmt.Println("[ ! ] Error mapping data into struct: ", err)
+			res.WriteHeader(http.StatusInternalServerError)
+			res.Write([]byte("500 - post not found"))
+			return
 		}
 
 		json.NewEncoder(res).Encode(&post)
@@ -71,7 +79,7 @@ func HandleGetPostByID(ctx context.Context, client *firestore.Client) func(res h
 }
 
 //HandleCreatePost ...Inserts a post to the DB
-func HandleCreatePost(ctx context.Context, client *firestore.Client) func(res http.ResponseWriter, req *http.Request) {
+func HandleCreatePost(ctx context.Context, client *firestore.Client, ch *amqp.Channel, q amqp.Queue) func(res http.ResponseWriter, req *http.Request) {
 	return func(res http.ResponseWriter, req *http.Request) {
 		res.Header().Set("Content-Type", "application/json")
 
@@ -101,14 +109,18 @@ func HandleCreatePost(ctx context.Context, client *firestore.Client) func(res ht
 			}
 
 			if err != nil {
-				log.Fatal("[ ! ] Error iterating documents: ", err)
+				fmt.Println("[ ! ] Error iterating documents: ", err)
+				res.WriteHeader(http.StatusInternalServerError)
+				res.Write([]byte("500 - post not found"))
+				return
 			}
-
-			fmt.Println("doc.Data: ", doc.Data())
 
 			err = doc.DataTo(&user)
 			if err != nil {
-				log.Fatal("[ ! ] Error mapping data to struct: ", err)
+				fmt.Println("[ ! ] Error mapping data to struct: ", err)
+				res.WriteHeader(http.StatusInternalServerError)
+				res.Write([]byte("500 - post not found"))
+				return
 			}
 		}
 		user.Posts = append(user.Posts, doc.ID)
@@ -117,14 +129,36 @@ func HandleCreatePost(ctx context.Context, client *firestore.Client) func(res ht
 		// write data to the doc
 		_, err := doc.Create(ctx, newPost)
 		if err != nil {
-			log.Fatal("[ ! ] Error creating new document: ", err)
+			fmt.Println("[ ! ] Error creating new document: ", err)
+			res.WriteHeader(http.StatusInternalServerError)
+			res.Write([]byte("500 - post not found"))
+			return
 		}
 
 		_, err = client.Collection("users").Doc(user.ID).Set(ctx, user)
 		if err != nil {
-			log.Fatal("[ ! ] Error assigning post to user: ", err)
+			fmt.Println("[ ! ] Error assigning post to user: ", err)
+			res.WriteHeader(http.StatusInternalServerError)
+			res.Write([]byte("500 - post not found"))
+			return
 		}
 
+		// send message saying a post was updated
+		body := doc.ID
+		err = ch.Publish(
+			"",
+			q.Name,
+			false,
+			false,
+			amqp.Publishing{
+				ContentType: "text/plain",
+				Type:        "UPDATE",
+				Body:        []byte(body),
+			})
+		if err != nil {
+			log.Fatal("[ ! ] Error publishing message")
+		}
+		fmt.Println("[ + ] Message sent")
 		json.NewEncoder(res).Encode(&newPost)
 	}
 }
@@ -149,14 +183,18 @@ func HandleDeletePost(ctx context.Context, client *firestore.Client) func(res ht
 			}
 
 			if err != nil {
-				log.Fatal("[ ! ] Error iterating documents: ", err)
+				fmt.Println("[ ! ] Error iterating documents: ", err)
+				res.WriteHeader(http.StatusInternalServerError)
+				res.Write([]byte("500 - post not found"))
+				return
 			}
-
-			fmt.Println("doc.Data: ", doc.Data())
 
 			err = doc.DataTo(&user)
 			if err != nil {
-				log.Fatal("[ ! ] Error mapping data to struct: ", err)
+				fmt.Println("[ ! ] Error mapping data to struct: ", err)
+				res.WriteHeader(http.StatusInternalServerError)
+				res.Write([]byte("500 - post not found"))
+				return
 			}
 		}
 
@@ -178,7 +216,7 @@ func HandleDeletePost(ctx context.Context, client *firestore.Client) func(res ht
 }
 
 // HandleEditPost ...Edits a post in the DB
-func HandleEditPost(ctx context.Context, client *firestore.Client) func(res http.ResponseWriter, req *http.Request) {
+func HandleEditPost(ctx context.Context, client *firestore.Client, ch *amqp.Channel, q amqp.Queue) func(res http.ResponseWriter, req *http.Request) {
 	return func(res http.ResponseWriter, req *http.Request) {
 		res.Header().Set("Content-Type", "application/json")
 		type Caption struct {
@@ -216,12 +254,28 @@ func HandleEditPost(ctx context.Context, client *firestore.Client) func(res http
 			log.Fatal("[ ! ] Error setting document: ", err)
 		}
 
+		body := id
+		err = ch.Publish(
+			"",
+			q.Name,
+			false,
+			false,
+			amqp.Publishing{
+				ContentType: "text/plain",
+				Type:        "UPDATE",
+				Body:        []byte(body),
+			})
+		if err != nil {
+			log.Fatal("[ ! ] Error publishing message")
+		}
+		fmt.Println("[ + ] Message sent")
+
 		json.NewEncoder(res).Encode(currentPost)
 	}
 }
 
 // HandleLikePost ... Handles liking a post
-func HandleLikePost(ctx context.Context, client *firestore.Client) func(res http.ResponseWriter, req *http.Request) {
+func HandleLikePost(ctx context.Context, client *firestore.Client, ch *amqp.Channel, q amqp.Queue) func(res http.ResponseWriter, req *http.Request) {
 	return func(res http.ResponseWriter, req *http.Request) {
 		res.Header().Set("Content-Type", "application/json")
 
@@ -278,6 +332,25 @@ func HandleLikePost(ctx context.Context, client *firestore.Client) func(res http
 		if err != nil {
 			log.Fatal("[ ! ] Error setting user: ", err)
 		}
+
+		// TODO:
+		// 	+ this only sends a message about the post being updated
+		// 		if the cache needs to update the user as well I'll need to fix this
+		body := id
+		err = ch.Publish(
+			"",
+			q.Name,
+			false,
+			false,
+			amqp.Publishing{
+				ContentType: "text/plain",
+				Type:        "UPDATE",
+				Body:        []byte(body),
+			})
+		if err != nil {
+			log.Fatal("[ ! ] Error publishing message")
+		}
+		fmt.Println("[ + ] Message sent")
 
 		json.NewEncoder(res).Encode(&post)
 	}
